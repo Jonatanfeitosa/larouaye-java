@@ -1,0 +1,45 @@
+# Configuração da API LarOuAyê. Segredos NUNCA ficam aqui: vêm de variáveis de ambiente.
+server:
+  port: ${PORT:8080}            # o Render define PORT
+  error:
+    include-stacktrace: never   # nunca vazar detalhes internos
+    include-message: never
+    include-binding-errors: never
+
+spring:
+  application:
+    name: larouaye-api
+  datasource:
+    url: ${DB_URL:jdbc:oracle:thin:@oracle.fiap.com.br:1521:ORCL}
+    username: ${DB_USER:}
+    password: ${DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: 5
+      connection-timeout: 10000
+      # O firewall/Oracle da FIAP derruba conexões ociosas. O pool renova antes (evita ORA-17008) e testa a conexão viva.
+      max-lifetime: 240000       # 4 min: menor que o tempo em que o Oracle/firewall fecham a conexão
+      keepalive-time: 120000     # a cada 2 min testa as conexões ociosas
+      minimum-idle: 1
+      connection-test-query: SELECT 1 FROM dual
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    default-property-inclusion: non_null   # não envia campos nulos (resposta mais limpa)
+  mvc:
+    problemdetails:
+      enabled: false
+
+larouaye:
+  cors:
+    origens: ${CORS_ORIGINS:http://localhost:5173,http://127.0.0.1:5173}
+  classificador:
+    url: ${CLASSIFICADOR_URL:http://localhost:5000}
+    timeout-ms: ${CLASSIFICADOR_TIMEOUT_MS:3000}
+  decisao:
+    limiar-responder: ${LIMIAR_RESPONDER:0.70}    # >= responde direto
+    limiar-esclarecer: ${LIMIAR_ESCLARECER:0.30}  # entre os dois limiares, pede esclarecimento
+
+logging:
+  level:
+    root: INFO
+    br.com.fiap.larouaye: INFO
