@@ -1,3 +1,4 @@
+
 package br.com.fiap.larouaye.dao;
 
 import br.com.fiap.larouaye.exception.PersistenciaException;
@@ -7,7 +8,6 @@ import br.com.fiap.larouaye.model.StatusConsulta;
 import org.springframework.stereotype.Repository;
 
 import javax.sql.DataSource;
-import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -17,13 +17,31 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-/** DAO da consulta (lado N do 1:N com o cidadão) com JDBC puro. */
+/**
+ * DAO das consultas jurídicas com JDBC puro.
+ * Adaptado ao modelo relacional definitivo do LarOuAyê.
+ */
 @Repository
 public class JdbcConsultaDao implements ConsultaDao {
 
-    private static final String SELECT = "SELECT q.cd_consulta, q.cd_cidadao, q.cd_categoria, c.cd_codigo, q.cd_orientacao, "
-            + "q.ds_pergunta, q.sg_uf, q.ds_etapa_atual, q.vl_confianca, q.ds_status, q.ds_canal, q.dt_consulta "
-            + "FROM tb_consulta q LEFT JOIN tb_categoria c ON c.cd_categoria = q.cd_categoria ";
+    private static final String SELECT =
+            "SELECT q.cd_consulta, q.cd_cidadao, "
+                    + "q.cd_categoria, c.cd_codigo, q.cd_orientacao, "
+                    + "q.ds_pergunta, q.sg_uf, "
+                    + "e.cd_codigo AS ds_etapa_atual, "
+                    + "q.vl_confianca, "
+                    + "s.cd_codigo AS ds_status, "
+                    + "cn.cd_codigo AS ds_canal, "
+                    + "q.dt_consulta "
+                    + "FROM tb_consulta q "
+                    + "LEFT JOIN tb_categoria c "
+                    + "ON c.cd_categoria = q.cd_categoria "
+                    + "LEFT JOIN tb_etapa e "
+                    + "ON e.cd_etapa = q.cd_etapa "
+                    + "INNER JOIN tb_status_consulta s "
+                    + "ON s.cd_status = q.cd_status "
+                    + "INNER JOIN tb_canal cn "
+                    + "ON cn.cd_canal = q.cd_canal ";
 
     private final DataSource dataSource;
 
@@ -33,17 +51,37 @@ public class JdbcConsultaDao implements ConsultaDao {
 
     @Override
     public Consulta inserir(Consulta q) {
-        String sql = "INSERT INTO tb_consulta (cd_consulta, cd_cidadao, cd_categoria, cd_orientacao, ds_pergunta, sg_uf, "
-                + "ds_etapa_atual, vl_confianca, ds_status, ds_canal) VALUES (sq_tb_consulta.NEXTVAL, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-        try (Connection con = dataSource.getConnection(); PreparedStatement ps = con.prepareStatement(sql, new String[] {"CD_CONSULTA"})) {
+
+        String sql = "INSERT INTO tb_consulta "
+                + "(cd_consulta, cd_cidadao, cd_categoria, "
+                + "cd_orientacao, ds_pergunta, sg_uf, "
+                + "cd_etapa, vl_confianca, cd_status, cd_canal) "
+                + "VALUES (sq_tb_consulta.NEXTVAL, ?, ?, ?, ?, ?, "
+                + "(SELECT cd_etapa FROM tb_etapa WHERE cd_codigo = ?), "
+                + "?, "
+                + "(SELECT cd_status FROM tb_status_consulta WHERE cd_codigo = ?), "
+                + "(SELECT cd_canal FROM tb_canal WHERE cd_codigo = ?))";
+
+        try (Connection con = dataSource.getConnection();
+             PreparedStatement ps = con.prepareStatement(
+                     sql, new String[]{"CD_CONSULTA"})) {
+
             preencher(ps, q);
+
             ps.executeUpdate();
+
             long id;
+
             try (ResultSet chaves = ps.getGeneratedKeys()) {
                 chaves.next();
                 id = chaves.getLong(1);
             }
-            return buscarPorId(id).orElseThrow(() -> new PersistenciaException("inserir consulta", null));
+
+            return buscarPorId(id)
+                    .orElseThrow(() ->
+                            new PersistenciaException(
+                                    "inserir consulta", null));
+
         } catch (SQLException e) {
             throw JdbcUtil.traduzir(e, "inserir consulta");
         }
@@ -51,28 +89,50 @@ public class JdbcConsultaDao implements ConsultaDao {
 
     @Override
     public List<Consulta> listarPorCidadao(Long cidadaoId) {
-        String sql = SELECT + "WHERE q.cd_cidadao = ? ORDER BY q.dt_consulta DESC, q.cd_consulta DESC";
-        try (Connection con = dataSource.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
+
+        String sql = SELECT
+                + "WHERE q.cd_cidadao = ? "
+                + "ORDER BY q.dt_consulta DESC, q.cd_consulta DESC";
+
+        try (Connection con = dataSource.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+
             ps.setLong(1, cidadaoId);
+
             List<Consulta> lista = new ArrayList<>();
+
             try (ResultSet rs = ps.executeQuery()) {
+
                 while (rs.next()) {
                     lista.add(mapear(rs));
                 }
             }
+
             return lista;
+
         } catch (SQLException e) {
-            throw JdbcUtil.traduzir(e, "listar consultas do cidadão");
+            throw JdbcUtil.traduzir(
+                    e, "listar consultas do cidadão");
         }
     }
 
     @Override
     public Optional<Consulta> buscarPorId(Long id) {
-        try (Connection con = dataSource.getConnection(); PreparedStatement ps = con.prepareStatement(SELECT + "WHERE q.cd_consulta = ?")) {
+
+        String sql = SELECT + "WHERE q.cd_consulta = ?";
+
+        try (Connection con = dataSource.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+
             ps.setLong(1, id);
+
             try (ResultSet rs = ps.executeQuery()) {
-                return rs.next() ? Optional.of(mapear(rs)) : Optional.empty();
+
+                return rs.next()
+                        ? Optional.of(mapear(rs))
+                        : Optional.empty();
             }
+
         } catch (SQLException e) {
             throw JdbcUtil.traduzir(e, "buscar consulta");
         }
@@ -80,12 +140,31 @@ public class JdbcConsultaDao implements ConsultaDao {
 
     @Override
     public boolean atualizar(Consulta q) {
-        String sql = "UPDATE tb_consulta SET cd_cidadao = ?, cd_categoria = ?, cd_orientacao = ?, ds_pergunta = ?, sg_uf = ?, "
-                + "ds_etapa_atual = ?, vl_confianca = ?, ds_status = ?, ds_canal = ? WHERE cd_consulta = ?";
-        try (Connection con = dataSource.getConnection(); PreparedStatement ps = con.prepareStatement(sql)) {
+
+        String sql = "UPDATE tb_consulta SET "
+                + "cd_cidadao = ?, "
+                + "cd_categoria = ?, "
+                + "cd_orientacao = ?, "
+                + "ds_pergunta = ?, "
+                + "sg_uf = ?, "
+                + "cd_etapa = (SELECT cd_etapa FROM tb_etapa "
+                + "WHERE cd_codigo = ?), "
+                + "vl_confianca = ?, "
+                + "cd_status = (SELECT cd_status FROM tb_status_consulta "
+                + "WHERE cd_codigo = ?), "
+                + "cd_canal = (SELECT cd_canal FROM tb_canal "
+                + "WHERE cd_codigo = ?) "
+                + "WHERE cd_consulta = ?";
+
+        try (Connection con = dataSource.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+
             preencher(ps, q);
+
             ps.setLong(10, q.getId());
+
             return ps.executeUpdate() > 0;
+
         } catch (SQLException e) {
             throw JdbcUtil.traduzir(e, "atualizar consulta");
         }
@@ -93,45 +172,75 @@ public class JdbcConsultaDao implements ConsultaDao {
 
     @Override
     public boolean remover(Long id) {
-        try (Connection con = dataSource.getConnection(); PreparedStatement ps = con.prepareStatement("DELETE FROM tb_consulta WHERE cd_consulta = ?")) {
+
+        String sql = "DELETE FROM tb_consulta "
+                + "WHERE cd_consulta = ?";
+
+        try (Connection con = dataSource.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+
             ps.setLong(1, id);
+
             return ps.executeUpdate() > 0;
+
         } catch (SQLException e) {
             throw JdbcUtil.traduzir(e, "remover consulta");
         }
     }
 
-    private static void preencher(PreparedStatement ps, Consulta q) throws SQLException {
+    private static void preencher(
+            PreparedStatement ps, Consulta q) throws SQLException {
+
         ps.setLong(1, q.getCidadaoId());
+
         JdbcUtil.setLong(ps, 2, q.getCategoriaId());
         JdbcUtil.setLong(ps, 3, q.getOrientacaoId());
+
         ps.setString(4, q.getPergunta());
         ps.setString(5, q.getUf());
+
         JdbcUtil.setString(ps, 6, q.getEtapaAtual());
+
         if (q.getConfianca() == null) {
             ps.setNull(7, Types.NUMERIC);
         } else {
             ps.setBigDecimal(7, q.getConfianca());
         }
+
         ps.setString(8, q.getStatus().name());
         ps.setString(9, q.getCanal().name());
     }
 
-    private static Consulta mapear(ResultSet rs) throws SQLException {
+    private static Consulta mapear(ResultSet rs)
+            throws SQLException {
+
         Consulta q = new Consulta();
+
         q.setId(rs.getLong("cd_consulta"));
         q.setCidadaoId(rs.getLong("cd_cidadao"));
-        q.setCategoriaId(JdbcUtil.getLong(rs, "cd_categoria"));
+
+        q.setCategoriaId(
+                JdbcUtil.getLong(rs, "cd_categoria"));
+
         q.setCategoriaCodigo(rs.getString("cd_codigo"));
-        q.setOrientacaoId(JdbcUtil.getLong(rs, "cd_orientacao"));
+
+        q.setOrientacaoId(
+                JdbcUtil.getLong(rs, "cd_orientacao"));
+
         q.setPergunta(rs.getString("ds_pergunta"));
         q.setUf(rs.getString("sg_uf"));
         q.setEtapaAtual(rs.getString("ds_etapa_atual"));
-        BigDecimal conf = rs.getBigDecimal("vl_confianca");
-        q.setConfianca(conf);
-        q.setStatus(StatusConsulta.valueOf(rs.getString("ds_status")));
-        q.setCanal(Canal.valueOf(rs.getString("ds_canal")));
-        q.setDataConsulta(JdbcUtil.getDataHora(rs, "dt_consulta"));
+        q.setConfianca(rs.getBigDecimal("vl_confianca"));
+
+        q.setStatus(
+                StatusConsulta.valueOf(rs.getString("ds_status")));
+
+        q.setCanal(
+                Canal.valueOf(rs.getString("ds_canal")));
+
+        q.setDataConsulta(
+                JdbcUtil.getDataHora(rs, "dt_consulta"));
+
         return q;
     }
 }
